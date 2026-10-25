@@ -44,7 +44,7 @@ logging:
 robot:
   auto_home_on_startup: false
   baud_rate: 3000000
-  com_port: /dev/ttyACM0
+  com_port: /dev/cu.usbserial-110
   estop_enabled: true
   j2_backlash_offset: 6
   timeout: 0
@@ -55,7 +55,7 @@ server:
   log_forward_port: 5003
   loop_interval: 0.01
 ui:
-  active_tool: duck
+  active_tool: default_no_offset
   cartesian_position_step_mm: 1
   commander_robot:
     color: '#ffffff'
@@ -70,53 +70,21 @@ ui:
     transparency: 0.3
   saved_positions:
   - joints:
-    - 90
-    - -90
-    - 180
+    - 0
+    - -75.6
+    - 74
     - 0
     - 0
-    - 180
+    - 0
     name: Home
   - joints:
     - 0
-    - -90
-    - 180
     - 0
     - 0
-    - 90
+    - 0
+    - 0
+    - 0
     name: Ready
-  - joints:
-    - 90
-    - -145.0088
-    - 107.866
-    - 0
-    - 0
-    - 180
-    name: Shutdown pose
-  - joints:
-    - 45
-    - -80
-    - 160
-    - 30
-    - 30
-    - 120
-    name: FK_Test_Multi
-  - joints:
-    - 64.63141597067505
-    - -64.4039557921825
-    - 131.53242976875376
-    - -89.33842933923947
-    - 84.95891208334258
-    - 174.61990431430576
-    name: Pickup1
-  - joints:
-    - 0.017578125
-    - -89.99625
-    - 179.99763157894736
-    - -90
-    - 0
-    - 180
-    name: FrontFacing
   show_safety_warnings: false
   step_angle: 1
   tcp_offset:
