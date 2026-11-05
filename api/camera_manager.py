@@ -300,11 +300,12 @@ class CameraManager:
 
 # Global camera manager instance
 _camera_manager: Optional[CameraManager] = None
+_PROJECT_ROOT_CONFIG = Path(__file__).parent.parent / "config.yaml"
 
 
 def get_camera_manager() -> CameraManager:
     """Get global camera manager instance (singleton)."""
     global _camera_manager
     if _camera_manager is None:
-        _camera_manager = CameraManager(config_path="/home/jacob/parol6/commander/config.yaml")
+        _camera_manager = CameraManager(config_path=str(_PROJECT_ROOT_CONFIG))
     return _camera_manager

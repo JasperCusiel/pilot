@@ -165,8 +165,15 @@ class MoveJointCommand:
                         continue
 
                     v_max_joint = np.interp(self.velocity_percent, [0, 100], [PAROL6_ROBOT.Joint_min_speed[i], PAROL6_ROBOT.Joint_max_speed[i]])
-                    a_max_rad = np.interp(accel_percent, [0, 100], [PAROL6_ROBOT.Joint_min_acc, PAROL6_ROBOT.Joint_max_acc])
-                    a_max_steps = PAROL6_ROBOT.SPEED_RAD2STEP(a_max_rad, i)
+                    # Joint_min_acc/Joint_max_acc are now real per-joint deg/s^2
+                    # ceilings (see robot_model.py) already expressed in wire
+                    # units/s^2, same convention as Joint_max_speed above - no
+                    # extra conversion needed here. Previously this ran the
+                    # flat scalar Joint_max_acc through SPEED_RAD2STEP as if it
+                    # were already in rad/s, which worked out to an effective
+                    # ceiling in the hundreds of millions of steps/s^2 -
+                    # acceleration was never actually constraining anything.
+                    a_max_steps = np.interp(accel_percent, [0, 100], [PAROL6_ROBOT.Joint_min_acc[i], PAROL6_ROBOT.Joint_max_acc[i]])
 
                     if v_max_joint <= 0 or a_max_steps <= 0:
                         raise ValueError(f"Invalid speed/acceleration for joint {i+1}. Must be positive.")

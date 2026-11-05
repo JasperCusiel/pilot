@@ -13,6 +13,19 @@ pyyaml>=6.0.0,<7.0.0
 
 # Numerical Computing & Mathematics
 numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# Kinematics (used by commander/, lib/kinematics/ and commands.py)
+# NOTE: these were previously missing from this file even though the code
+# imports them directly. `pip install -r requirements.txt` alone would not
+# produce a working commander process without them.
+roboticstoolbox-python>=1.1.0,<2.0.0
+spatialmath-python>=1.1.0,<2.0.0
+spatialgeometry>=1.1.0,<2.0.0
+swift-sim>=1.1.0,<2.0.0
+
+# Precise control-loop timing (commander/commander.py control loop)
+oclock>=1.2.0,<2.0.0
 
 # Computer Vision (Camera Support)
 opencv-python>=4.8.0,<5.0.0
@@ -28,6 +41,14 @@ psutil>=5.9.0,<6.0.0
 
 # Documentation
 mkdocs-material>=9.5.0,<10.0.0
+
+# Optional: lets commander.py re-enable the robot with the 'e' key after an
+# E-stop when running on a desktop with a real keyboard/display session.
+# On Linux this package needs to read /dev/input directly, which normally
+# requires root - so it is NOT required for headless Pi operation.
+# commander.py already falls back gracefully if this isn't installed/usable.
+# Uncomment only if you want the desktop hotkey and are OK running as root:
+# keyboard>=0.13.5,<0.14.0
 
 # Development Dependencies (Optional)
 # Uncomment for development features:

@@ -570,3 +570,49 @@ class UpdateToolRequest(BaseModel):
     stl_data: Optional[str] = Field(None, description="Base64 encoded STL file data")
     stl_data_open: Optional[str] = Field(None, description="Base64 encoded STL file data for open state")
     stl_data_closed: Optional[str] = Field(None, description="Base64 encoded STL file data for closed state")
+
+# --- Custom robot profiles (Configuration > Robot Model drag & drop) ------
+
+class RobotMeshFile(BaseModel):
+    """One mesh file dropped alongside a custom robot's URDF."""
+    filename: str = Field(..., description="Original filename, e.g. 'base_link.stl'")
+    data: str = Field(..., description="Base64 encoded file data")
+
+
+class UploadRobotRequest(BaseModel):
+    """Request to register a new custom robot from a dropped URDF + meshes."""
+    name: str = Field(..., description="Display name for this robot", min_length=1)
+    urdf_filename: str = Field(..., description="Original URDF filename, e.g. 'robot.urdf'")
+    urdf_data: str = Field(..., description="Base64 encoded URDF XML")
+    meshes: List[RobotMeshFile] = Field(default_factory=list, description="Mesh files referenced by the URDF")
+    joint_mapping: List[str] = Field(
+        ...,
+        description="The 6 URDF <joint name=\"..\"> values, in J1..J6 order, as chosen on upload",
+        min_items=6,
+        max_items=6,
+    )
+
+
+class ActivateRobotProfileRequest(BaseModel):
+    """Request to make a robot profile (built-in or custom) the active one."""
+    id: str = Field(..., description="'parol6' or a custom profile id")
+
+
+class DHJointParams(BaseModel):
+    """One row of a standard Denavit-Hartenberg table entry for a single joint."""
+    a_mm: float = Field(..., description="Link length 'a' in millimetres")
+    alpha_deg: float = Field(..., description="Link twist 'alpha' in degrees")
+    d_mm: float = Field(..., description="Link offset 'd' in millimetres")
+    offset_deg: float = Field(0, description="Joint angle offset in degrees (usually 0)")
+
+
+class SaveDHParamsRequest(BaseModel):
+    """Request to save/overwrite a custom robot profile's Cartesian/IK geometry."""
+    joints: List[DHJointParams] = Field(..., description="J1..J6 DH rows, in order", min_items=6, max_items=6)
+
+
+class SaveJointLimitsRequest(BaseModel):
+    """Request to override a custom robot profile's joint limits (degrees)."""
+    limits_deg: List[List[float]] = Field(
+        ..., description="J1..J6, each [min, max] in degrees", min_items=6, max_items=6
+    )

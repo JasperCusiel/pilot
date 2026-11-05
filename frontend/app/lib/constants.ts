@@ -13,15 +13,37 @@ export const CARTESIAN_AXES: CartesianAxis[] = [
   "RZ",
 ];
 
-// Joint limits from PAROL6_ROBOT.py (degrees)
-export const JOINT_LIMITS = {
-  J1: { min: -60, max: 60 },
-  J2: { min: -75.6, max: 90 },
-  J3: { min: -90, max: 72 },
+// Joint limits (degrees) - PAROL6's real travel limits, matching
+// lib/kinematics/robot_model.py's Joint_limits_degree on the backend (which
+// is what actually gets enforced during trajectory planning) and the
+// firmware README's PAROL6 reference table.
+//
+// NOTE: these were previously placeholder-looking values that didn't match
+// either of those, which meant the frontend's Cartesian IK preview could
+// silently disagree with what the backend would actually allow.
+//
+// This is the DEFAULT, used when the built-in PAROL6 profile is active. When
+// a custom robot profile is active, getActiveJointLimits() below returns
+// that robot's limits instead (read from its URDF on upload - see
+// Configuration > Robot Model and AUDIT.md).
+// This arm's real travel limits (degrees, CCW positive) - must match
+// lib/kinematics/robot_model.py's Joint_limits_degree on the backend
+// exactly, or the frontend's joint sliders/Cartesian IK clamping will
+// enforce different bounds than what the backend actually allows. J6 is a
+// continuous joint with no limit switch; [-3600, 3600] is a generous
+// practical bound, same choice as the backend - adjust both together if
+// you want something different.
+export const PAROL6_JOINT_LIMITS = {
+  J1: { min: -125, max: 125 },
+  J2: { min: -135, max: 78 },
+  J3: { min: -74, max: 165 },
   J4: { min: -270, max: 270 },
-  J5: { min: -108, max: 108 },
-  J6: { min: -360, max: 360 },
+  J5: { min: -90, max: 90 },
+  J6: { min: -3600, max: 3600 },
 };
+
+/** @deprecated Use getActiveJointLimits() so custom robot profiles are respected. */
+export const JOINT_LIMITS = PAROL6_JOINT_LIMITS;
 
 // Joint angle offsets for URDF visualization (degrees)
 // These offsets correct the visual model to match the real robot's coordinate system

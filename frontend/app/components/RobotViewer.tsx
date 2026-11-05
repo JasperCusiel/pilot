@@ -29,6 +29,7 @@ import { useSafetyConfirmation } from '../hooks/useSafetyConfirmation';
 import { calculateTcpPoseFromUrdf } from '../lib/tcpCalculations';
 import { threeJsToRobot } from '../lib/coordinateTransform';
 import { applyJointAnglesToUrdf } from '../lib/urdfHelpers';
+import { useRobotProfileStore, getActiveUrdfPath, getActiveJointNames } from '../lib/stores/robotProfileStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -204,7 +205,8 @@ function ToolMesh({
     for (const obj of objects) {
       if (!obj || !robotRef) continue;
 
-      const l6Link = robotRef.links?.['L6'];
+      const toolMountLinkName = getActiveJointNames()[5]; // PAROL6: 'L6'
+      const l6Link = robotRef.links?.[toolMountLinkName];
       if (!l6Link) continue;
 
       l6Link.updateMatrixWorld(true);
@@ -347,6 +349,11 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
   const showTargetRobot = useInputStore((state) => state.showTargetRobot);
   const commandedGripperState = useCommandStore((state) => state.commandedGripperState);
   const commanderToolFromStore = useCommandStore((state) => state.commanderTool);
+  // Gate URDF loading until the active robot profile has been fetched (it's
+  // an async request that starts around the same time as this component
+  // mounts) - otherwise this could load PAROL6.urdf even when a custom
+  // robot is actually active, on first page load.
+  const robotProfileLoaded = useRobotProfileStore((state) => state.loaded);
 
   // Tool mesh state (supports both STL geometry and GLTF scenes)
   const [toolMeshGeometry, setToolMeshGeometry] = useState<THREE.BufferGeometry | null>(null);
@@ -392,10 +399,16 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
   // 2. Hardware visual (ghost robot showing feedback)
   // 3. Computation headless (for FK/IK calculations)
   useEffect(() => {
+    if (!robotProfileLoaded) return; // wait for the active profile to resolve first
+
+    const urdfPath = getActiveUrdfPath();
+    const urdfJointNames = getActiveJointNames(); // [J1..J6] -> URDF joint names for the active robot
+    const toolMountJointName = urdfJointNames[5]; // PAROL6: 'L6'. Last joint in the chain, where tools attach.
+
     const loader = new URDFLoader();
 
     loader.load(
-      '/urdf/PAROL6.urdf',
+      urdfPath,
       (loadedRobot: any) => {
         logger.debug('URDF loaded successfully', 'RobotSetup');
 
@@ -437,7 +450,7 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
             if (child.isMesh) {
               let parent = child.parent;
               while (parent) {
-                if (parent.isURDFLink && parent.name === 'L6') {
+                if (parent.isURDFLink && parent.name === toolMountJointName) {
                   child.parent.remove(child);
                   commanderL6Removed++;
                   break;
@@ -456,9 +469,12 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
               let parent = child.parent;
               while (parent) {
                 if (parent.isURDFJoint) {
-                  const match = parent.name.match(/L(\d)/);
-                  if (match) {
-                    jointName = `J${match[1]}` as JointName;
+                  // Map this URDF joint's name back to J1..J6 using the
+                  // active profile's joint name list (works for any custom
+                  // robot's naming scheme, not just PAROL6's 'L1'..'L6').
+                  const jointIndex = urdfJointNames.indexOf(parent.name);
+                  if (jointIndex !== -1) {
+                    jointName = `J${jointIndex + 1}` as JointName;
                   }
                   break;
                 }
@@ -522,7 +538,7 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
             if (child.isMesh) {
               let parent = child.parent;
               while (parent) {
-                if (parent.isURDFLink && parent.name === 'L6') {
+                if (parent.isURDFLink && parent.name === toolMountJointName) {
                   child.parent.remove(child);
                   hardwareL6Removed++;
                   break;
@@ -548,9 +564,12 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
               let parent = child.parent;
               while (parent) {
                 if (parent.isURDFJoint) {
-                  const match = parent.name.match(/L(\d)/);
-                  if (match) {
-                    jointName = `J${match[1]}` as JointName;
+                  // Map this URDF joint's name back to J1..J6 using the
+                  // active profile's joint name list (works for any custom
+                  // robot's naming scheme, not just PAROL6's 'L1'..'L6').
+                  const jointIndex = urdfJointNames.indexOf(parent.name);
+                  if (jointIndex !== -1) {
+                    jointName = `J${jointIndex + 1}` as JointName;
                   }
                   break;
                 }
@@ -634,7 +653,7 @@ function URDFRobot({ showLabels, hardwareRobotColor, hardwareRobotTransparency, 
       useCommandStore.setState({ commanderRobotRef: null });
       useHardwareStore.setState({ hardwareRobotRef: null });
     };
-  }, []);
+  }, [robotProfileLoaded]);
 
   // Fetch and load active tool mesh
   useEffect(() => {
@@ -1742,7 +1761,7 @@ export default function RobotViewer({ activeToolId }: { activeToolId?: string } 
   };
 
   return (
-    <div className="w-full h-full bg-gray-950 rounded-lg overflow-hidden border relative">
+    <div className="w-full h-full bg-neutral-100 rounded-lg overflow-hidden border relative">
       {/* IK Progress Bar Overlay */}
       <IKProgressBar />
 

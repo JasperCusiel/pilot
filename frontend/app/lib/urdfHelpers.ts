@@ -7,6 +7,11 @@
 
 import { JointAngles } from './types';
 import { JOINT_ANGLE_OFFSETS } from './constants';
+import { getActiveJointNames } from './stores/robotProfileStore';
+
+/** PAROL6's URDF link names - the long-standing default (and still used by
+ *  JOINT_ANGLE_OFFSETS/angleSigns calibration below, which is PAROL6-specific). */
+export const DEFAULT_URDF_JOINT_NAMES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6'];
 
 /**
  * Apply joint angles to URDF robot model with proper transformations
@@ -21,17 +26,28 @@ import { JOINT_ANGLE_OFFSETS } from './constants';
  * - angleSigns: Per-joint sign multipliers (for axis direction differences)
  * - JOINT_ANGLE_OFFSETS: Per-joint offset additions (for zero position differences)
  * - Degree to radian conversion
- * - Joint name mapping: J1→L1, J2→L2, etc.
+ * - Joint name mapping: J1→urdfJointNames[0], J2→urdfJointNames[1], etc.
+ *
+ * @param urdfJointNames - The 6 URDF joint names to map J1..J6 onto. Defaults
+ *   to the currently active robot profile's names (PAROL6's 'L1'..'L6'
+ *   unless a custom robot is active - see Configuration > Robot Model).
+ *   angleSigns/JOINT_ANGLE_OFFSETS below are PAROL6-specific calibration
+ *   values found by iterative testing; a custom robot starts with no
+ *   sign flips/offsets (identity) since those can't be safely guessed from
+ *   a URDF alone. If a custom robot's 3D pose doesn't match the physical
+ *   arm, this is where to add per-joint corrections for it.
  */
 export function applyJointAnglesToUrdf(
   urdfRobot: any,
-  jointAngles: JointAngles
+  jointAngles: JointAngles,
+  urdfJointNames: string[] = getActiveJointNames()
 ): void {
   if (!urdfRobot) return;
 
-  // Angle signs for each joint (calibrated for current URDF)
-  // OLD URDF values: [1, 1, -1, -1, -1, -1]
-  // NEW URDF values: [1, 1, 1, 1, 1, 1] (identity - no inversions)
+  const isDefaultParol6Urdf = urdfJointNames.join(',') === DEFAULT_URDF_JOINT_NAMES.join(',');
+
+  // Angle signs for each joint (calibrated for PAROL6's URDF specifically).
+  // A custom robot gets identity signs/offsets - see the doc comment above.
   const angleSigns = [1, 1, 1, 1, 1, 1];
 
   const jointNames = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6'] as const;
@@ -39,7 +55,7 @@ export function applyJointAnglesToUrdf(
   jointNames.forEach((joint, index) => {
     const angleDeg = jointAngles[joint];
     const sign = angleSigns[index];
-    const offset = JOINT_ANGLE_OFFSETS[index] || 0;
+    const offset = isDefaultParol6Urdf ? (JOINT_ANGLE_OFFSETS[index] || 0) : 0;
 
     // Apply transformations: (angle * sign) + offset
     const correctedAngleDeg = angleDeg * sign + offset;
@@ -47,11 +63,10 @@ export function applyJointAnglesToUrdf(
     // Convert to radians
     const angleRad = (correctedAngleDeg * Math.PI) / 180;
 
-    // Map to URDF link name: J1→L1, J2→L2, etc.
-    const linkName = `L${index + 1}`;
+    const urdfJointName = urdfJointNames[index];
 
     try {
-      urdfRobot.setJointValue(linkName, angleRad);
+      urdfRobot.setJointValue(urdfJointName, angleRad);
     } catch (e) {
       // Silently ignore joint not found errors
       // This can happen during URDF loading or if joint doesn't exist
@@ -66,23 +81,30 @@ export function applyJointAnglesToUrdf(
  * and reverses the transformations to get back to user-space angles.
  *
  * @param urdfRobot - The URDF robot instance to read from
+ * @param urdfJointNames - The 6 URDF joint names J1..J6 map onto; see
+ *   applyJointAnglesToUrdf for defaults/details (must match what was used
+ *   to set the angles, or this won't be a correct inverse).
  * @returns Joint angles in degrees {J1, J2, J3, J4, J5, J6} or null if failed
  */
-export function getJointAnglesFromUrdf(urdfRobot: any): JointAngles | null {
+export function getJointAnglesFromUrdf(
+  urdfRobot: any,
+  urdfJointNames: string[] = getActiveJointNames()
+): JointAngles | null {
   if (!urdfRobot) return null;
 
+  const isDefaultParol6Urdf = urdfJointNames.join(',') === DEFAULT_URDF_JOINT_NAMES.join(',');
   const angleSigns = [1, 1, 1, 1, 1, 1];
   const jointNames = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6'] as const;
   const result: any = {};
 
   try {
     jointNames.forEach((joint, index) => {
-      const linkName = `L${index + 1}`;
-      const angleRad = urdfRobot.joints[linkName]?.angle || 0;
+      const urdfJointName = urdfJointNames[index];
+      const angleRad = urdfRobot.joints[urdfJointName]?.angle || 0;
       const angleDeg = (angleRad * 180) / Math.PI;
 
       // Reverse transformations: (angle - offset) / sign
-      const offset = JOINT_ANGLE_OFFSETS[index] || 0;
+      const offset = isDefaultParol6Urdf ? (JOINT_ANGLE_OFFSETS[index] || 0) : 0;
       const sign = angleSigns[index];
       result[joint] = (angleDeg - offset) / sign;
     });

@@ -33,7 +33,20 @@ import os
 import re
 import logging
 import struct
-import keyboard
+try:
+    # Optional: only used for the desktop 'press e to re-enable after E-stop'
+    # convenience hotkey. On headless Linux (e.g. a Pi) this package can raise
+    # on import alone if it can't get raw access to /dev/input (normally
+    # requires root), which would otherwise take down the whole commander
+    # process before it ever opens the serial port. Fall back to a stub that
+    # reports no key presses; E-stop recovery still works via the UDP command.
+    import keyboard
+except Exception:
+    class _NoKeyboard:
+        @staticmethod
+        def is_pressed(_key):
+            return False
+    keyboard = _NoKeyboard()
 from typing import Optional, Tuple
 from spatialmath.base import trinterp
 from collections import namedtuple, deque

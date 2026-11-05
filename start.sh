@@ -1,14 +1,25 @@
 #!/bin/bash
-# PAROL6 Startup Script
+# PAROL6 / custom-arm Startup Script
 # Kills any existing PM2 processes and starts fresh
 
-cd /home/jacob/parol6
+set -e
 
-echo "=== PAROL6 Startup Script ==="
+# Resolve to this script's own directory so it works regardless of where
+# the repo is checked out (previously hardcoded to one developer's machine).
+cd "$(dirname "$0")"
+
+echo "=== Startup Script ==="
+
+if [ ! -d "frontend/.next" ]; then
+  echo "No production build found - building frontend (first run, this can"
+  echo "take a while on a Pi Zero 2W)..."
+  (cd frontend && npm ci && npm run build)
+fi
+
 echo "Stopping any existing PM2 processes..."
 
 # Kill all existing PM2 processes
-pm2 kill 2>/dev/null
+pm2 kill 2>/dev/null || true
 
 # Small delay to ensure processes are fully stopped
 sleep 2

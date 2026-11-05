@@ -48,6 +48,9 @@ robot:
   estop_enabled: true
   j2_backlash_offset: 6
   timeout: 0
+robot_profiles:
+  active: parol6
+  custom: []
 server:
   ack_port: 5002
   command_port: 5001
@@ -71,7 +74,7 @@ ui:
   saved_positions:
   - joints:
     - 0
-    - -75.6
+    - -78
     - 74
     - 0
     - 0

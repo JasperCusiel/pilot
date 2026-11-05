@@ -28,6 +28,7 @@ import { applyJointAnglesToUrdf } from '../lib/urdfHelpers';
 import GripperTCPVisualizer from '../components/GripperTCPVisualizer';
 import ToolCard from '../components/ToolCard';
 import ToolDeleteDialog from '../components/ToolDeleteDialog';
+import CustomRobotUploader from '../components/CustomRobotUploader';
 import { getApiBaseUrl } from '../lib/apiConfig';
 import { logger } from '../lib/logger';
 
@@ -1092,6 +1093,7 @@ export default function ConfigurationPage() {
             <TabsList className="w-full mb-3">
               <TabsTrigger value="tools" className="flex-1">Tools</TabsTrigger>
               <TabsTrigger value="robot" className="flex-1">Robot</TabsTrigger>
+              <TabsTrigger value="robot-model" className="flex-1">Robot Model</TabsTrigger>
               <TabsTrigger value="environment" className="flex-1" disabled>Environment</TabsTrigger>
             </TabsList>
 
@@ -1802,11 +1804,15 @@ export default function ConfigurationPage() {
             </Button>
           </Card>
             </TabsContent>
+
+            <TabsContent value="robot-model" className="space-y-3 mt-0">
+              <CustomRobotUploader />
+            </TabsContent>
           </Tabs>
         </div>
 
         {/* Right Panel - 3D Preview (React Three Fiber Canvas) */}
-        <div className="w-full h-full bg-gray-950 rounded-lg overflow-hidden border relative">
+        <div className="w-full h-full bg-neutral-100 rounded-lg overflow-hidden border relative">
           <div className="absolute top-4 left-4 z-10 bg-black/70 px-3 py-1.5 rounded-lg backdrop-blur-sm">
             <h3 className="text-sm font-semibold">Tool Preview</h3>
           </div>

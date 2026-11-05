@@ -10,6 +10,35 @@ from pathlib import Path
 # Get project root (parent of api directory)
 PROJECT_ROOT = Path(__file__).parent.parent
 
+
+def safe_filename(filename: str) -> str:
+    """
+    Reduce a client-supplied filename to a bare, safe file name before it is
+    ever joined onto a disk path.
+
+    Uploaded mesh/URDF filenames (tool meshes, custom robot URDF + meshes)
+    were previously written to disk as `some_dir / request.mesh_file` with no
+    validation at all - a filename containing '..' or an absolute path would
+    let a request write outside the intended meshes directory. This strips
+    any directory components and rejects anything that doesn't look like a
+    plausible mesh/URDF/model filename.
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    # Drop any directory component the client tried to sneak in, from either
+    # a POSIX or Windows-style path.
+    name = filename.replace("\\", "/").split("/")[-1]
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}", name):
+        raise HTTPException(status_code=400, detail=f"Invalid filename: {filename!r}")
+
+    allowed_ext = {".stl", ".glb", ".gltf", ".urdf", ".dae", ".obj"}
+    if Path(name).suffix.lower() not in allowed_ext:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {filename!r}")
+
+    return name
+
 # Apply numpy compatibility patch for numpy 2.0+
 from api.utils import numpy_patch
 
@@ -28,6 +57,8 @@ import json
 import xml.etree.ElementTree as ET
 import shutil
 import base64
+import re
+import math
 
 # Import robot client (UDP client to commander) and models
 from api import robot_client
@@ -975,6 +1006,7 @@ async def update_urdf_gripper(
         stl_data: Optional base64 encoded STL file data to save
     """
     try:
+        mesh_filename = safe_filename(mesh_filename)
         urdf_path = PROJECT_ROOT / "frontend" / "public" / "urdf" / "PAROL6.urdf"
         meshes_dir = PROJECT_ROOT / "frontend" / "public" / "urdf" / "meshes"
 
@@ -1116,7 +1148,6 @@ async def create_tool(request: CreateToolRequest):
     """Create new tool"""
     try:
         # Generate tool ID from name (slugify)
-        import re
         tool_id = re.sub(r'[^a-z0-9]+', '_', request.name.lower()).strip('_')
 
         # Ensure ID is unique
@@ -1178,7 +1209,7 @@ async def create_tool(request: CreateToolRequest):
 
         # Save main STL file if provided
         if request.stl_data and request.mesh_file:
-            stl_path = meshes_dir / request.mesh_file
+            stl_path = meshes_dir / safe_filename(request.mesh_file)
             stl_bytes = base64.b64decode(request.stl_data)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1186,7 +1217,7 @@ async def create_tool(request: CreateToolRequest):
 
         # Save open state STL if provided
         if request.stl_data_open and request.gripper_config and request.gripper_config.mesh_file_open:
-            stl_path = meshes_dir / request.gripper_config.mesh_file_open
+            stl_path = meshes_dir / safe_filename(request.gripper_config.mesh_file_open)
             stl_bytes = base64.b64decode(request.stl_data_open)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1194,7 +1225,7 @@ async def create_tool(request: CreateToolRequest):
 
         # Save closed state STL if provided
         if request.stl_data_closed and request.gripper_config and request.gripper_config.mesh_file_closed:
-            stl_path = meshes_dir / request.gripper_config.mesh_file_closed
+            stl_path = meshes_dir / safe_filename(request.gripper_config.mesh_file_closed)
             stl_bytes = base64.b64decode(request.stl_data_closed)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1279,7 +1310,7 @@ async def update_tool(tool_id: str, request: UpdateToolRequest):
 
         # Save main STL file if provided
         if request.stl_data and request.mesh_file:
-            stl_path = meshes_dir / request.mesh_file
+            stl_path = meshes_dir / safe_filename(request.mesh_file)
             stl_bytes = base64.b64decode(request.stl_data)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1287,7 +1318,7 @@ async def update_tool(tool_id: str, request: UpdateToolRequest):
 
         # Save open state STL if provided
         if request.stl_data_open and request.gripper_config and request.gripper_config.mesh_file_open:
-            stl_path = meshes_dir / request.gripper_config.mesh_file_open
+            stl_path = meshes_dir / safe_filename(request.gripper_config.mesh_file_open)
             stl_bytes = base64.b64decode(request.stl_data_open)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1295,7 +1326,7 @@ async def update_tool(tool_id: str, request: UpdateToolRequest):
 
         # Save closed state STL if provided
         if request.stl_data_closed and request.gripper_config and request.gripper_config.mesh_file_closed:
-            stl_path = meshes_dir / request.gripper_config.mesh_file_closed
+            stl_path = meshes_dir / safe_filename(request.gripper_config.mesh_file_closed)
             stl_bytes = base64.b64decode(request.stl_data_closed)
             with open(stl_path, "wb") as f:
                 f.write(stl_bytes)
@@ -1401,6 +1432,384 @@ async def mount_tool(tool_id: str):
     except Exception as e:
         logger.error(f"Failed to mount tool: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to mount tool: {str(e)}")
+
+
+# --- Custom Robot Profiles (drag & drop URDF + meshes) ---------------------
+# See Configuration > Robot Model in the frontend, and AUDIT.md, for the full
+# picture of what this does and doesn't cover. Short version: this safely
+# handles visualization and joint-space jogging/limits for any 6-joint
+# (revolute or continuous) URDF. It deliberately does NOT touch Cartesian/IK
+# geometry (DH parameters) - those stay on PAROL6's values until a human
+# fills them in, because they can't be derived safely from an STL/URDF drop.
+
+ROBOT_PROFILES_DIR_NAME = "custom"  # under frontend/public/urdf/
+
+
+def _custom_robots_root() -> Path:
+    root = PROJECT_ROOT / "frontend" / "public" / "urdf" / ROBOT_PROFILES_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _slugify_robot_name(name: str, existing_ids: set) -> str:
+    base = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_') or "robot"
+    if base == "parol6":
+        base = f"{base}_custom"
+    slug = base
+    counter = 1
+    while slug in existing_ids:
+        counter += 1
+        slug = f"{base}_{counter}"
+    return slug
+
+
+def _load_robot_profiles_config(config: dict) -> dict:
+    """Get (and if missing, create) the robot_profiles block in a loaded config dict."""
+    if "robot_profiles" not in config or not isinstance(config.get("robot_profiles"), dict):
+        config["robot_profiles"] = {"active": "parol6", "custom": []}
+    config["robot_profiles"].setdefault("active", "parol6")
+    config["robot_profiles"].setdefault("custom", [])
+    return config["robot_profiles"]
+
+
+@app.get("/api/config/robot/profiles")
+async def list_robot_profiles():
+    """List the built-in PAROL6 profile plus any uploaded custom robots."""
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+        active_id = profiles_cfg["active"]
+
+        profiles = [{
+            "id": "parol6",
+            "name": "PAROL6 (default)",
+            "builtin": True,
+            "urdf_path": "/urdf/PAROL6.urdf",
+            "joint_names": ["L1", "L2", "L3", "L4", "L5", "L6"],
+            "has_dh_params": True,
+            "active": active_id == "parol6",
+        }]
+        for entry in profiles_cfg["custom"]:
+            profiles.append({
+                "id": entry["id"],
+                "name": entry.get("name", entry["id"]),
+                "builtin": False,
+                "urdf_path": entry.get("urdf_path"),
+                "joint_names": entry.get("joint_names", []),
+                "joint_limits_deg": entry.get("joint_limits_deg"),
+                "dh_params": entry.get("dh_params"),
+                "has_dh_params": entry.get("dh_params") is not None,
+                "active": entry["id"] == active_id,
+            })
+
+        return {"profiles": profiles, "active": active_id}
+    except Exception as e:
+        logger.error(f"Failed to list robot profiles: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list robot profiles: {str(e)}")
+
+
+@app.post("/api/config/robot/upload")
+async def upload_robot(request: UploadRobotRequest):
+    """
+    Register a new custom robot from a dropped URDF + mesh files.
+
+    Validates that the URDF parses, that all 6 mapped joint names actually
+    exist in it as revolute/continuous joints, and that every mesh the URDF
+    references was actually uploaded - before writing anything to disk.
+    """
+    try:
+        # 1. Decode and parse the URDF first; reject anything malformed
+        #    before touching the filesystem.
+        try:
+            urdf_bytes = base64.b64decode(request.urdf_data)
+            urdf_text = urdf_bytes.decode("utf-8")
+        except Exception:
+            raise HTTPException(status_code=400, detail="urdf_data is not valid base64/UTF-8")
+
+        try:
+            root = ET.fromstring(urdf_text)
+        except ET.ParseError as e:
+            raise HTTPException(status_code=400, detail=f"Could not parse URDF XML: {e}")
+
+        if root.tag != "robot":
+            raise HTTPException(status_code=400, detail=f"Expected a <robot> root element, got <{root.tag}>")
+
+        # 2. Validate the 6 mapped joints exist and are revolute/continuous
+        movable_joints = {
+            j.get("name"): j for j in root.findall("joint")
+            if j.get("type") in ("revolute", "continuous")
+        }
+        missing = [name for name in request.joint_mapping if name not in movable_joints]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"These joint names from your mapping were not found as revolute/continuous "
+                       f"joints in the URDF: {missing}. Found joints: {sorted(movable_joints.keys())}"
+            )
+        if len(set(request.joint_mapping)) != 6:
+            raise HTTPException(status_code=400, detail="joint_mapping must name 6 distinct joints")
+
+        # 3. Derive J1..J6 joint limits (degrees) straight from the URDF
+        joint_limits_deg = []
+        for joint_name in request.joint_mapping:
+            joint_el = movable_joints[joint_name]
+            limit_el = joint_el.find("limit")
+            if joint_el.get("type") == "continuous" and limit_el is None:
+                joint_limits_deg.append([-360.0, 360.0])
+                continue
+            if limit_el is None or limit_el.get("lower") is None or limit_el.get("upper") is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Joint '{joint_name}' has no <limit lower=\"\" upper=\"\"> and isn't "
+                           f"continuous - add explicit limits in the URDF before uploading."
+                )
+            lower_deg = math.degrees(float(limit_el.get("lower")))
+            upper_deg = math.degrees(float(limit_el.get("upper")))
+            joint_limits_deg.append([round(lower_deg, 4), round(upper_deg, 4)])
+
+        # 4. Match every <mesh filename="..."> reference against uploaded files
+        uploaded_by_basename = {}
+        for mesh_file in request.meshes:
+            safe_name = safe_filename(mesh_file.filename)
+            uploaded_by_basename[safe_name] = (safe_name, mesh_file.data)
+
+        referenced_basenames = set()
+        mesh_elements = []
+        for mesh_el in root.findall(".//mesh"):
+            raw_filename = mesh_el.get("filename")
+            if not raw_filename:
+                continue
+            basename = raw_filename.replace("\\", "/").split("/")[-1]
+            referenced_basenames.add(basename)
+            mesh_elements.append(mesh_el)
+
+        missing_meshes = [b for b in referenced_basenames if b not in uploaded_by_basename]
+        if missing_meshes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The URDF references mesh files that weren't included in the drop: {sorted(missing_meshes)}"
+            )
+
+        # 5. Rewrite every <mesh filename> to point at ./meshes/<basename>,
+        #    regardless of how the source URDF referenced them (absolute,
+        #    package://, different relative layout, etc.) - matches the
+        #    convention the rest of this app already uses for PAROL6.urdf.
+        for mesh_el in mesh_elements:
+            raw_filename = mesh_el.get("filename")
+            basename = raw_filename.replace("\\", "/").split("/")[-1]
+            mesh_el.set("filename", f"./meshes/{basename}")
+        rewritten_urdf = ET.tostring(root, encoding="unicode")
+
+        # 6. Pick a unique id/slug and write files to disk
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+        existing_ids = {"parol6"} | {e["id"] for e in profiles_cfg["custom"]}
+
+        # Re-uploading the same name updates that robot in place rather than
+        # creating a duplicate.
+        existing_entry = next((e for e in profiles_cfg["custom"]
+                                if e.get("name") == request.name), None)
+        slug = existing_entry["id"] if existing_entry else _slugify_robot_name(request.name, existing_ids)
+
+        robot_dir = _custom_robots_root() / slug
+        meshes_dir = robot_dir / "meshes"
+        meshes_dir.mkdir(parents=True, exist_ok=True)
+
+        urdf_filename = safe_filename(request.urdf_filename)
+        urdf_path_on_disk = robot_dir / urdf_filename
+        with open(urdf_path_on_disk, "w", encoding="utf-8") as f:
+            f.write(rewritten_urdf)
+
+        for basename, (_, data_b64) in uploaded_by_basename.items():
+            if basename not in referenced_basenames:
+                continue  # don't write files the URDF doesn't actually use
+            with open(meshes_dir / basename, "wb") as f:
+                f.write(base64.b64decode(data_b64))
+
+        # 7. Record the profile in config.yaml
+        profile_entry = {
+            "id": slug,
+            "name": request.name,
+            "urdf_path": f"/urdf/{ROBOT_PROFILES_DIR_NAME}/{slug}/{urdf_filename}",
+            "joint_names": list(request.joint_mapping),
+            "joint_limits_deg": joint_limits_deg,
+            "dh_params": existing_entry.get("dh_params") if existing_entry else None,
+        }
+        profiles_cfg["custom"] = [e for e in profiles_cfg["custom"] if e["id"] != slug] + [profile_entry]
+
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        logger.info(f"Registered custom robot profile '{slug}' ({len(uploaded_by_basename)} mesh files)")
+        return {"message": f"Robot '{request.name}' uploaded successfully", "profile": profile_entry}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload custom robot: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload custom robot: {str(e)}")
+
+
+@app.post("/api/config/robot/activate")
+async def activate_robot_profile(request: ActivateRobotProfileRequest):
+    """Make a robot profile (built-in PAROL6 or a custom upload) the active one."""
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+
+        if request.id != "parol6" and not any(e["id"] == request.id for e in profiles_cfg["custom"]):
+            raise HTTPException(status_code=404, detail=f"Robot profile '{request.id}' not found")
+
+        profiles_cfg["active"] = request.id
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        logger.info(f"Activated robot profile: {request.id}")
+        return {"message": f"Robot profile '{request.id}' is now active", "active": request.id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to activate robot profile: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to activate robot profile: {str(e)}")
+
+
+@app.post("/api/config/robot/profiles/{profile_id}/joint-limits")
+async def save_robot_joint_limits(profile_id: str, request: SaveJointLimitsRequest):
+    """
+    Override a custom robot profile's joint limits (e.g. to add a safety
+    margin beyond what the URDF specified, or correct a URDF that had the
+    wrong limits). This is the same field upload populates automatically -
+    this just lets you edit it afterward instead of re-uploading.
+    """
+    if profile_id == "parol6":
+        raise HTTPException(status_code=400, detail="Cannot edit limits on the built-in PAROL6 profile")
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+
+        entry = next((e for e in profiles_cfg["custom"] if e["id"] == profile_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"Robot profile '{profile_id}' not found")
+
+        for lo, hi in request.limits_deg:
+            if lo >= hi:
+                raise HTTPException(status_code=400, detail=f"Each joint's min must be less than its max (got [{lo}, {hi}])")
+
+        entry["joint_limits_deg"] = [list(pair) for pair in request.limits_deg]
+
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        logger.info(f"Updated joint limits for robot profile '{profile_id}'")
+        return {"message": f"Joint limits updated for '{entry['name']}'", "profile": entry}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save joint limits: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save joint limits: {str(e)}")
+
+
+@app.post("/api/config/robot/profiles/{profile_id}/dh-params")
+async def save_robot_dh_params(profile_id: str, request: SaveDHParamsRequest):
+    """
+    Save Cartesian/IK geometry (standard DH table) for a custom robot
+    profile. Once this is set, lib/kinematics/robot_model.py builds its
+    DHRobot from these values instead of PAROL6's for this profile - see
+    AUDIT.md for why this is a deliberate, explicit step rather than
+    something derived automatically from the URDF.
+    """
+    if profile_id == "parol6":
+        raise HTTPException(status_code=400, detail="Cannot set DH parameters on the built-in PAROL6 profile")
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+
+        entry = next((e for e in profiles_cfg["custom"] if e["id"] == profile_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"Robot profile '{profile_id}' not found")
+
+        entry["dh_params"] = {"joints": [j.dict() for j in request.joints]}
+
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        logger.info(f"Saved DH parameters for robot profile '{profile_id}'")
+        return {
+            "message": f"DH parameters saved for '{entry['name']}'. Restart the API/commander "
+                       f"process to pick them up, then verify in joint-space before trusting "
+                       f"Cartesian moves.",
+            "profile": entry,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save DH parameters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save DH parameters: {str(e)}")
+
+
+@app.delete("/api/config/robot/profiles/{profile_id}/dh-params")
+async def clear_robot_dh_params(profile_id: str):
+    """Clear a custom robot's DH parameters, reverting it to joint-space-only (PAROL6 geometry for Cartesian)."""
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+
+        entry = next((e for e in profiles_cfg["custom"] if e["id"] == profile_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"Robot profile '{profile_id}' not found")
+
+        entry["dh_params"] = None
+
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        return {"message": f"DH parameters cleared for '{entry['name']}'", "profile": entry}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to clear DH parameters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear DH parameters: {str(e)}")
+
+
+@app.delete("/api/config/robot/profiles/{profile_id}")
+async def delete_robot_profile(profile_id: str):
+    """Remove a custom robot profile and its uploaded files."""
+    if profile_id == "parol6":
+        raise HTTPException(status_code=400, detail="Cannot delete the built-in PAROL6 profile")
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        profiles_cfg = _load_robot_profiles_config(config)
+
+        if not any(e["id"] == profile_id for e in profiles_cfg["custom"]):
+            raise HTTPException(status_code=404, detail=f"Robot profile '{profile_id}' not found")
+
+        profiles_cfg["custom"] = [e for e in profiles_cfg["custom"] if e["id"] != profile_id]
+        if profiles_cfg["active"] == profile_id:
+            profiles_cfg["active"] = "parol6"
+            logger.info(f"Deleted active profile '{profile_id}' - reverted active robot to PAROL6")
+
+        with open(CONFIG_PATH, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        robot_dir = _custom_robots_root() / profile_id
+        if robot_dir.exists() and robot_dir.is_dir() and robot_dir.parent == _custom_robots_root():
+            shutil.rmtree(robot_dir)
+
+        return {"message": f"Robot profile '{profile_id}' deleted", "active": profiles_cfg["active"]}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete robot profile: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete robot profile: {str(e)}")
 
 
 # Logging Endpoints
